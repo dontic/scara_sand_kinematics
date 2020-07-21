@@ -1,0 +1,265 @@
+import math
+
+# Robot variables
+L = 75  # Length of robot arms in mm
+motor_steps = 200  # Steps per revolution
+gear_ratio = 3  # Gear ratio motor-arm pulley
+microsteps = 1 / 16  # Microsteps of the arduino
+init_x = 0  # Arm initial position in degrees
+init_y = 180  # Forearm initial position in degrees
+steps_per_degree = motor_steps * gear_ratio / (microsteps * 360)  # Steps per degree
+
+# Gcode variables
+gcode = 'sandify'  # Filename of original gcode
+x_offset = -150  # In mm
+y_offset = -150  # In mm
+quality = 1  # Length of lines in mm
+
+x_new = 0
+y_new = 0
+x_old_prev = 0
+y_old_prev = 0
+x_prev = 0
+y_prev = 0
+x_prev2 = 0
+y_prev2 = 0
+theta1_prev = 0
+theta2_prev = 0
+theta1_prev2 = 0
+theta2_prev2 = 0
+i = 0
+
+
+def find_angles(x, y):
+    # Angle of forearm with respect to arm
+    q3 = math.acos(min((((x ** 2) + (y ** 2)) / (2 * (L ** 2)) - 1), 1))
+
+    # Angle of arm with respect to x
+    q1 = math.atan2(y, x) - math.atan2((math.sin(q3)), (1 + math.cos(q3)))
+
+    # Angle of forearm with respect to x
+    q2 = (q1 + q3)
+
+    Abs_degrees_arm = round(math.degrees(q1), 4)
+    Abs_degrees_forearm = round(math.degrees(q2), 4)
+
+    return [Abs_degrees_arm, Abs_degrees_forearm]
+
+
+def back_to_0(x_angle, y_angle):
+    revolutions_x = int(x_angle / 360)
+    revolutions_y = int(y_angle / 360)
+    angleto0_x = x_angle % 360
+    angleto0_y = y_angle % 360
+    if angleto0_y < angleto0_x:
+        angleto0_y = angleto0_y + 360
+
+    # Angle necessary to go back to 0, 0 the quickest
+    alpha = (angleto0_x + 180 - angleto0_y) / 2
+
+    return [alpha, revolutions_x, revolutions_y]
+
+
+def interpolate(x_it, y_it, x_it_prev, y_it_prev):
+    d = math.sqrt((x_it - x_it_prev) ** 2 + (y_it - y_it_prev) ** 2)
+    n_its = int(d)
+    array_x = []
+    array_y = []
+
+    it = 1
+    while it <= n_its:
+        array_x.append(x_it_prev + (x_it - x_it_prev) / n_its * it)
+        array_y.append(y_it_prev + (y_it - y_it_prev) / n_its * it)
+        it += 1
+    print(x_it)
+    print('Iterations x: ', array_x)
+    print('Iterations y: ', array_y)
+
+    return [array_x, array_y]
+
+
+def get_xy(x_n, y_n):
+
+    global x_old_prev
+    global y_old_prev
+    global x_prev
+    global y_prev
+    global x_prev2
+    global y_prev2
+    global theta1_prev
+    global theta2_prev
+    global theta1_prev2
+    global theta2_prev2
+    global i
+
+    # Differentiate between 0, 0 and other lines
+    if x_n != y_n:
+        # If line isn't 0, 0
+
+        if x_prev != y_prev:
+            # If previous line wasn't at 0, 0
+
+            if x_n - x_prev < 0:
+                while abs(x_prev - x_n) > 300:
+                    x_n = x_n + 360
+            if y_n - y_prev < 0:
+                while abs(y_prev - y_n) > 300:
+                    y_n = y_n + 360
+
+            if x_n - x_prev > 0:
+                while abs(x_prev - x_n) > 300:
+                    x_n = x_n - 360
+            if y_n - y_prev > 0:
+                while abs(y_prev - y_n) > 300:
+                    y_n = y_n - 360
+
+            new_line = 'G01 ' + 'X' + str(round(x_n, 4)) + ' ' + 'Y' + str(round(y_n, 4))
+            new_g.write(new_line)
+            new_g.write("\n")
+            print(new_line)
+
+        elif x_prev == y_prev:
+            # If previous line was at 0, 0
+
+            if i == 0:
+                # If it's first line of the gcode
+
+                # Get angle "alpha" necessary to go from 0, 0 to the new position the shortest way possible
+                alpha = (x_n - y_n) / 2
+
+                # Define x and y positions for first 0, 0
+                x_first = x_n - alpha
+                y_first = y_n + alpha
+
+                # Write the first line, the 0, 0 position
+                new_line = 'G01 ' + 'X' + str(round(x_first, 4)) + ' ' + 'Y' + str(round(y_first, 4))
+                new_g.write(new_line)
+                new_g.write("\n")
+                print(new_line)
+
+                # Write new line
+                new_line = 'G01 ' + 'X' + str(round(x_n, 4)) + ' ' + 'Y' + str(round(y_n, 4))
+                new_g.write(new_line)
+                new_g.write("\n")
+                print(new_line)
+
+                i = 1
+            else:
+                # Do nothing
+                o = 0
+
+    elif x_n == y_n:
+        # If line is 0, 0
+
+        if i == 0:
+            # First line of gcode, don't write anything, wait for next line
+            i = 0
+
+        elif i == 1:
+            # Other lines
+
+            # Get angle "alpha" necessary to go from the previous position to 0, 0 the shortest way possible
+            alpha = (x_prev - y_prev) / 2
+
+            # Define x and y positions for 0, 0
+            x_n = x_prev - alpha
+            y_n = y_prev + alpha
+
+            # Write new line
+            new_line = 'G01 ' + 'X' + str(round(x_n, 4)) + ' ' + 'Y' + str(round(y_n, 4))
+            new_g.write(new_line)
+            new_g.write("\n")
+            print(new_line)
+
+    x_old_prev = x_old
+    y_old_prev = y_old
+
+    theta1_prev2 = theta1_prev
+    theta2_prev2 = theta2_prev
+    theta1_prev = theta1
+    theta2_prev = theta2
+
+    x_prev2 = x_prev
+    y_prev2 = y_prev
+    x_prev = x_n
+    y_prev = y_n
+
+
+old_g = open(gcode + ".gcode", "r")
+new_g = open(gcode + "_SCARA.gcode", "w+")
+
+new_g.write("; Translated for use with SCARA robot\n")
+new_g.write("; File Quality: %d mm\n" % quality)
+new_g.write("F1000\n")
+
+for line in old_g:
+
+    arguments = line.upper().split()  # Split arguments of gcode line
+
+    if line.upper().startswith("G00 ") or line.upper().startswith("G01 "):
+
+        print(arguments)
+
+        x_old = None
+        y_old = None
+
+        # Assign variables of original gcode
+        for coord in arguments:
+            # Goes through the gcode line and stores important values
+            if coord.upper().startswith("X"):
+                x_old = float(coord[1:].strip()) + x_offset
+            elif coord.upper().startswith("Y"):
+                y_old = float(coord[1:].strip()) + y_offset
+            elif coord.upper().startswith("F"):
+                f = float(coord[1:].strip())
+
+        # Check quality
+        x_points = []
+        y_points = []
+
+        if math.sqrt((x_old - x_old_prev)**2 + (y_old - y_old_prev)**2) > quality:
+            [x_points, y_points] = interpolate(x_old, y_old, x_old_prev, y_old_prev)
+            n = 1
+            while n < len(x_points):
+                print(n)
+                # Get angles of the two arms in degrees
+                x_old = x_points[n]
+                y_old = y_points[n]
+                [theta1, theta2] = find_angles(x_old, y_old)
+                x_new = theta1 - init_x
+                y_new = theta2 - init_y
+
+                get_xy(x_new, y_new)
+
+                n += 1
+        else:
+
+            # Get angles of the two arms in degrees
+            [theta1, theta2] = find_angles(x_old, y_old)
+            x_new = theta1 - init_x
+            y_new = theta2 - init_y
+
+            get_xy(x_new, y_new)
+
+    if line.upper().startswith("\n") and x_prev == y_prev != 0:
+        # Last line of the gcode
+        print('last line')
+        # Get angle "alpha" necessary to go from the previous position to 0, 0 the shortest way possible
+        [alp, revs_x, revs_y] = back_to_0(x_prev2, y_prev2)
+
+        # Define new x and y
+        x_new = revs_x * 360
+        y_new = revs_x * 360
+
+        # Write new line
+        new_line = 'G01 ' + 'X' + str(round(x_new, 4)) + ' ' + 'Y' + str(round(y_new, 4))
+        new_g.write(new_line)
+        new_g.write("\n")
+        print(new_line)
+
+        # Write new line
+        new_line = 'G92\n'  # Reset all axis to 0
+        new_g.write(new_line)
+        print(new_line)
+
+new_g.close()
